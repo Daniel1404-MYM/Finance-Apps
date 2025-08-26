@@ -6,9 +6,9 @@ import plotly.express as px
 import numpy as np
 
 # Title and Introduction
-st.title("FP&A Data is Beautiful")
+st.title("FP&A_Data is Beautiful")
 st.write("""
-Welcome to **FP&A Data is Beautiful**! Explore 20 different ways to analyze FP&A data using intuitive and interactive visuals.
+Welcome to **FP&A_Data is Beautiful**! Explore 20 different ways to analyze FP&A data using intuitive and interactive visuals.
 Use the dropdown menu on the left to select an analysis type.
 """)
 
