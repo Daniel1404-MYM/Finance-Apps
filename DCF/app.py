@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 import numpy as np
-import plotly.express as px
 import plotly.graph_objects as go
 import os
 from groq import Groq
@@ -26,23 +25,36 @@ company_name = st.text_input("🔍 Enter a Stock Ticker:", "AAPL")  # Default: A
 
 if st.button("🚀 Generate DCF Model"):
     try:
-        # Fetch financial data
         stock = yf.Ticker(company_name)
-        financials = stock.financials.fillna(0)  # Avoid missing data
-        cash_flow = stock.cashflow.fillna(0)  # Fix for missing cash flow items
-        market_data = stock.history(period="1y")
 
-        # Extract key financial data
-        revenue = financials.loc["Total Revenue"].values[0] if "Total Revenue" in financials.index else 0
-        net_income = financials.loc["Net Income"].values[0] if "Net Income" in financials.index else 0
+        # Try fetching data
+        financials = stock.financials if stock.financials is not None else pd.DataFrame()
+        cash_flow = stock.cashflow if stock.cashflow is not None else pd.DataFrame()
 
-        # Fix: Handle missing cash flow data
-        operating_cash_flow = cash_flow.loc["Total Cash From Operating Activities"].values[0] if "Total Cash From Operating Activities" in cash_flow.index else 0
-        capex = cash_flow.loc["Capital Expenditures"].values[0] if "Capital Expenditures" in cash_flow.index else 0
+        # Extract financials safely
+        revenue = financials.loc["Total Revenue"].values[0] if "Total Revenue" in financials.index else np.nan
+        net_income = financials.loc["Net Income"].values[0] if "Net Income" in financials.index else np.nan
 
-        free_cash_flow = operating_cash_flow - capex  # Free Cash Flow Calculation
-        shares_outstanding = stock.info.get("sharesOutstanding", 1)
-        risk_free_rate = 0.025  # Approximate risk-free rate (US 10-Year Treasury)
+        operating_cash_flow = (
+            cash_flow.loc["Total Cash From Operating Activities"].values[0]
+            if "Total Cash From Operating Activities" in cash_flow.index
+            else np.nan
+        )
+        capex = (
+            cash_flow.loc["Capital Expenditures"].values[0]
+            if "Capital Expenditures" in cash_flow.index
+            else np.nan
+        )
+
+        # Handle missing data with fallbacks
+        if np.isnan(operating_cash_flow) or np.isnan(capex):
+            st.warning("⚠️ Missing cash flow data, estimating FCF from Net Income instead.")
+            free_cash_flow = net_income if not np.isnan(net_income) else 1_000_000_000  # default $1B
+        else:
+            free_cash_flow = operating_cash_flow - capex
+
+        shares_outstanding = stock.info.get("sharesOutstanding", 1e9)  # fallback 1B shares
+        current_price = stock.info.get("currentPrice", np.nan)
 
         # **User Input for DCF Assumptions**
         st.sidebar.header("📊 DCF Assumptions")
@@ -51,15 +63,18 @@ if st.button("🚀 Generate DCF Model"):
         terminal_growth_rate = st.sidebar.slider("Terminal Growth Rate (%)", 0, 5, 2) / 100
         projection_years = st.sidebar.slider("Projection Period (Years)", 1, 10, 5)
 
-        # **DCF Model Calculations**
+        # **DCF Projection**
         cash_flows = []
+        fcf = free_cash_flow
         for i in range(projection_years):
-            free_cash_flow *= (1 + growth_rate)
-            discounted_cash_flow = free_cash_flow / ((1 + discount_rate) ** (i + 1))
+            fcf *= (1 + growth_rate)
+            discounted_cash_flow = fcf / ((1 + discount_rate) ** (i + 1))
             cash_flows.append(discounted_cash_flow)
 
-        terminal_value = (free_cash_flow * (1 + terminal_growth_rate)) / (discount_rate - terminal_growth_rate)
+        # Terminal value
+        terminal_value = (fcf * (1 + terminal_growth_rate)) / (discount_rate - terminal_growth_rate)
         discounted_terminal_value = terminal_value / ((1 + discount_rate) ** projection_years)
+
         total_enterprise_value = sum(cash_flows) + discounted_terminal_value
         intrinsic_value_per_share = total_enterprise_value / shares_outstanding
 
@@ -67,8 +82,13 @@ if st.button("🚀 Generate DCF Model"):
         st.subheader("📊 DCF Valuation Results")
         st.write(f"**Enterprise Value:** ${total_enterprise_value:,.2f}")
         st.write(f"**Intrinsic Value per Share:** ${intrinsic_value_per_share:,.2f}")
-        st.write(f"**Current Market Price per Share:** ${stock.info.get('currentPrice', 'N/A')}")
-        st.write(f"**Upside/Downside Potential:** {((intrinsic_value_per_share / stock.info.get('currentPrice', 1) - 1) * 100):.2f}%")
+        st.write(f"**Current Market Price per Share:** ${current_price if not np.isnan(current_price) else 'N/A'}")
+
+        if not np.isnan(current_price):
+            upside = ((intrinsic_value_per_share / current_price) - 1) * 100
+            st.write(f"**Upside/Downside Potential:** {upside:.2f}%")
+        else:
+            st.write("**Upside/Downside Potential:** N/A (no current price data)")
 
         # **Plot DCF Cash Flows**
         st.subheader("📈 Projected Free Cash Flows")
@@ -79,25 +99,22 @@ if st.button("🚀 Generate DCF Model"):
         fig_dcf.update_layout(title=f"{company_name} Projected Free Cash Flows", xaxis_title="Years", yaxis_title="Cash Flow (USD)", template="plotly_dark")
         st.plotly_chart(fig_dcf)
 
-        # **AI-Powered Valuation Insights**
+        # **AI Insights**
         st.subheader("🤖 AI-Powered Valuation Insights")
-
         client = Groq(api_key=GROQ_API_KEY)
         response = client.chat.completions.create(
             messages=[
-                {"role": "system", "content": "You are an AI financial analyst providing insights on Discounted Cash Flow (DCF) valuation models."},
-                {"role": "user", "content": f"Here is the DCF valuation summary for {company_name}:\n"
+                {"role": "system", "content": "You are an AI financial analyst providing insights on DCF models."},
+                {"role": "user", "content": f"Here is the DCF summary for {company_name}:\n"
                                             f"Revenue Growth Rate: {growth_rate*100:.2f}%\n"
-                                            f"Discount Rate (WACC): {discount_rate*100:.2f}%\n"
+                                            f"Discount Rate: {discount_rate*100:.2f}%\n"
                                             f"Terminal Growth Rate: {terminal_growth_rate*100:.2f}%\n"
                                             f"Enterprise Value: ${total_enterprise_value:,.2f}\n"
-                                            f"Intrinsic Value per Share: ${intrinsic_value_per_share:,.2f}\n"
-                                            f"Current Market Price: ${stock.info.get('currentPrice', 'N/A')}\n"
-                                            f"What are the key insights and investment considerations based on this valuation?"}
+                                            f"Intrinsic Value/Share: ${intrinsic_value_per_share:,.2f}\n"
+                                            f"Current Price: ${current_price}\n"}
             ],
             model="llama3-8b-8192",
         )
-
         st.write(response.choices[0].message.content)
 
     except Exception as e:
