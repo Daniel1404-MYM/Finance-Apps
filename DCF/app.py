@@ -113,7 +113,7 @@ if st.button("🚀 Generate DCF Model"):
                                             f"Intrinsic Value/Share: ${intrinsic_value_per_share:,.2f}\n"
                                             f"Current Price: ${current_price}\n"}
             ],
-            model="llama3-8b-8192",
+            model="openai/gpt-oss-120b",
         )
         st.write(response.choices[0].message.content)
 
